@@ -1,12 +1,8 @@
 /**
  * worker.js — Shared contact form Worker
  *
- * Deployed to: Cloudflare Workers
+ * Deployed to: Cloudflare Workers (rr-shared-contact)
  * Handles route: www.[customer].com/mailform
- *
- * NOTE: This version includes debug logging throughout for troubleshooting.
- * Once the issue is resolved, debug log lines should be removed.
- * Debug lines are marked with [debug] prefix for easy identification.
  *
  * ROLE IN THE STACK
  * -----------------
@@ -31,7 +27,16 @@
  * ----------------------
  * Add or remove customers in the CUSTOMERS object below.
  * Domain keys must be lowercase and without www prefix.
- * Redeployment via Git push is required after any change.
+ * Redeployment via Git push is required after any change:
+ *   1. Edit CUSTOMERS object
+ *   2. Commit and push via Git Desktop
+ *   3. Add WAF Managed Challenge rule in customer's Cloudflare dashboard:
+ *        Expression: http.request.uri.path eq "/mailform"
+ *                    and http.request.method eq "POST"
+ *        Action: Managed Challenge
+ *   4. Add route www.customer.com/mailform → rr-shared-contact
+ *   5. Point form action to https://www.customer.com/mailform
+ *      and confirm form submits as a traditional POST
  *
  * SECRETS
  * -------
@@ -39,6 +44,13 @@
  * as a Cloudflare Worker secret set in the Cloudflare dashboard:
  *   Workers & Pages → rr-shared-contact → Settings → Variables and Secrets
  * It is accessible in code as env.FORM_SECRET.
+ * It must match the value configured in .htaccess on Dreamhost.
+ *
+ * DEBUGGING
+ * ---------
+ * Set DEBUG = true to enable verbose logging in Cloudflare Workers logs.
+ * Set DEBUG = false for production — no log overhead, no sensitive data exposure.
+ * After changing, commit and push via Git Desktop to redeploy.
  *
  * ROUTE BINDING
  * -------------
@@ -48,9 +60,29 @@
 
 
 // ============================================================
+// DEBUG FLAG
+// ============================================================
+
+/**
+ * Set to true to enable verbose step-by-step logging in Cloudflare Workers logs.
+ * Set to false for production — skips all debug logging entirely.
+ * Change this, commit, and push to toggle without touching any other code.
+ */
+const DEBUG = false;
+
+
+// ============================================================
 // CUSTOMER CONFIGURATION
 // ============================================================
 
+/**
+ * Maps each customer domain to their configuration.
+ * Domain keys must be lowercase and without www prefix.
+ *
+ * Fields:
+ *   recipient — Email address where contact form submissions are delivered.
+ *               Must be a valid, monitored mailbox.
+ */
 const CUSTOMERS = {
     "richardsonresources.com": {
         recipient: "mdr6273@gmail.com"
@@ -66,11 +98,44 @@ const CUSTOMERS = {
 // CONSTANTS
 // ============================================================
 
-const PHP_ENDPOINT  = "https://customertools.richardsonresources.com/formactions/shared-contact.php";
-const ALLOWED_FIELDS = new Set(["name", "email", "message", "redirect", "recaptchaResponse", "cf-turnstile-response"]);
-const REQUIRED_FIELDS = ["name", "email", "message"];
-const ROOT_REDIRECT  = { path: "/", anchor: "" };
+/**
+ * The PHP relay endpoint that sends the email.
+ * All validated submissions are forwarded here.
+ */
+const PHP_ENDPOINT = "https://customertools.richardsonresources.com/formactions/shared-contact.php";
 
+/**
+ * Allowed form field names. Any submission containing fields outside
+ * this set is treated as a bot or probe — fake success, discard.
+ *
+ * recaptchaResponse  — Added by Nicepage automatically when using Email submit
+ * cf-turnstile-response — Added by Cloudflare Turnstile if used in future
+ */
+const ALLOWED_FIELDS = new Set([
+    "name",
+    "email",
+    "message",
+    "redirect",
+    "recaptchaResponse",
+    "cf-turnstile-response"
+]);
+
+/**
+ * Fields that must be present and non-empty on every submission.
+ */
+const REQUIRED_FIELDS = ["name", "email", "message"];
+
+/**
+ * The fallback redirect target used only when no form data is available
+ * (steps 1 and 2) and a redirect field cannot yet be parsed.
+ */
+const ROOT_REDIRECT = { path: "/", anchor: "" };
+
+/**
+ * User-facing messages.
+ * Legitimate success and silent rejection use ui-msgtype=success but differ
+ * subtly so you can verify spam filtering is working during testing.
+ */
 const MESSAGES = {
     success:      "Your message has been sent.",
     silentReject: "Your message has been sent !!!",
@@ -84,46 +149,61 @@ const MESSAGES = {
 
 export default {
 
+    /**
+     * fetch() is the entry point Cloudflare calls for every HTTP request
+     * that matches this Worker's route.
+     *
+     *   request — The incoming HTTP request from the browser
+     *   env     — Environment bindings including secrets (env.FORM_SECRET)
+     *   ctx     — Execution context (not used here)
+     */
     async fetch(request, env, ctx) {
 
-        console.log("[debug] Worker fired:", request.method, request.url);
+        debug("Worker fired:", request.method, request.url);
 
         const url      = new URL(request.url);
         const hostname = url.hostname.replace(/^www\./, "");
 
-        console.log("[debug] hostname resolved to:", hostname);
+        debug("hostname resolved to:", hostname);
 
         // --------------------------------------------------------
         // STEP 1 — Identify the customer
         // --------------------------------------------------------
+        // Look up the hostname in the customer config. If not found,
+        // this request came from an unknown domain — return fake success.
+        // Falls back to ROOT_REDIRECT because we have no form data yet.
 
         const customer = CUSTOMERS[hostname];
 
-        console.log("[debug] customer lookup result:", customer ? "found" : "NOT FOUND");
+        debug("customer lookup result:", customer ? "found" : "NOT FOUND");
 
         if (!customer) {
-            console.log("[debug] exiting — unknown domain");
+            debug("exiting — unknown domain");
             return fakeSuccess(url, ROOT_REDIRECT);
         }
 
+        // Validate the recipient address format before we do anything else.
+        // This catches config typos early.
         const recipientValid = isValidEmailFormat(customer.recipient);
-        console.log("[debug] recipient format valid:", recipientValid, "—", customer.recipient);
+        debug("recipient format valid:", recipientValid, "—", customer.recipient);
 
         if (!recipientValid) {
-            console.error(`[shared-contact] Invalid recipient format for domain: ${hostname}`);
+            console.error(`[shared-contact] Invalid recipient format for domain: ${hostname} — check CUSTOMERS config`);
             return fakeSuccess(url, ROOT_REDIRECT);
         }
 
         // --------------------------------------------------------
         // STEP 2 — Parse the form body
         // --------------------------------------------------------
+        // Nicepage submits forms as application/x-www-form-urlencoded.
+        // Falls back to ROOT_REDIRECT on failure — still no form data.
 
         let formData;
 
         try {
             const body = await request.formData();
             formData = Object.fromEntries(body.entries());
-            console.log("[debug] form parsed OK, fields received:", Object.keys(formData).join(", "));
+            debug("form parsed OK, fields received:", Object.keys(formData).join(", "));
         } catch (e) {
             console.error(`[shared-contact] Failed to parse form body: ${e.message}`);
             return fakeSuccess(url, ROOT_REDIRECT);
@@ -132,53 +212,58 @@ export default {
         // --------------------------------------------------------
         // STEP 3 — Parse redirect field
         // --------------------------------------------------------
+        // Parse immediately after we have form data. From this point on,
+        // every exit path uses this validated redirect target rather than
+        // falling back to root.
 
         const redirectTarget = parseRedirect((formData.redirect ?? "").trim());
-        console.log("[debug] redirect target:", JSON.stringify(redirectTarget));
+        debug("redirect target:", JSON.stringify(redirectTarget));
 
         // --------------------------------------------------------
         // STEP 4 — Validate the field set
         // --------------------------------------------------------
+        // Any field not in ALLOWED_FIELDS means this is not coming from
+        // one of our forms — bots often add extra fields when probing.
 
         for (const key of Object.keys(formData)) {
             if (!ALLOWED_FIELDS.has(key)) {
-                console.log("[debug] exiting — unexpected field detected:", key);
+                debug("exiting — unexpected field detected:", key);
                 return fakeSuccess(url, redirectTarget);
             }
         }
 
-        console.log("[debug] field set valid");
+        debug("field set valid");
 
         // --------------------------------------------------------
         // STEP 5 — Validate required fields
         // --------------------------------------------------------
 
-        const name     = (formData.name     ?? "").trim();
-        const email    = (formData.email    ?? "").trim();
-        const message  = (formData.message  ?? "").trim();
+        const name    = (formData.name    ?? "").trim();
+        const email   = (formData.email   ?? "").trim();
+        const message = (formData.message ?? "").trim();
 
-        console.log("[debug] name:", name ? "present" : "MISSING");
-        console.log("[debug] email:", email ? "present" : "MISSING");
-        console.log("[debug] message:", message ? "present" : "MISSING");
+        debug("name:", name ? "present" : "MISSING");
+        debug("email:", email ? "present" : "MISSING");
+        debug("message:", message ? "present" : "MISSING");
 
         for (const field of REQUIRED_FIELDS) {
             if (!formData[field] || !formData[field].trim()) {
-                console.log("[debug] exiting — missing required field:", field);
+                debug("exiting — missing required field:", field);
                 return fakeSuccess(url, redirectTarget);
             }
         }
 
-        console.log("[debug] required fields all present");
+        debug("required fields all present");
 
         // --------------------------------------------------------
         // STEP 6 — Validate email format
         // --------------------------------------------------------
 
         const emailFormatValid = isValidEmailFormat(email);
-        console.log("[debug] email format valid:", emailFormatValid, "—", email);
+        debug("email format valid:", emailFormatValid, "—", email);
 
         if (!emailFormatValid) {
-            console.log("[debug] exiting — invalid email format");
+            debug("exiting — invalid email format");
             return fakeSuccess(url, redirectTarget);
         }
 
@@ -187,36 +272,41 @@ export default {
         // --------------------------------------------------------
 
         const emailDomain = email.split("@")[1];
-        console.log("[debug] checking MX records for domain:", emailDomain);
+        debug("checking MX records for domain:", emailDomain);
 
         const mxValid = await hasMxRecords(emailDomain);
-        console.log("[debug] MX records found:", mxValid);
+        debug("MX records found:", mxValid);
 
         if (!mxValid) {
-            console.log("[debug] exiting — no MX records for:", emailDomain);
+            debug("exiting — no MX records for:", emailDomain);
             return fakeSuccess(url, redirectTarget);
         }
 
         // --------------------------------------------------------
         // STEP 8 — Spam and malicious content check
         // --------------------------------------------------------
+        // Field-appropriate rules — name permits apostrophes (O'Brien).
+        // Both block URLs only — the real deliverability concern.
 
         const nameSpam    = isSpamOrMaliciousName(name);
         const messageSpam = isSpamOrMaliciousMessage(message);
 
-        console.log("[debug] name spam check:", nameSpam ? "FLAGGED" : "clean");
-        console.log("[debug] message spam check:", messageSpam ? "FLAGGED" : "clean");
+        debug("name spam check:", nameSpam ? "FLAGGED" : "clean");
+        debug("message spam check:", messageSpam ? "FLAGGED" : "clean");
 
         if (nameSpam || messageSpam) {
-            console.log("[debug] exiting — spam or malicious content detected");
+            debug("exiting — spam or malicious content detected");
             return fakeSuccess(url, redirectTarget);
         }
 
         // --------------------------------------------------------
         // STEP 9 — POST to PHP relay
         // --------------------------------------------------------
+        // X-WAF-Secret header authenticates the request — .htaccess on
+        // Dreamhost blocks anything without the correct secret before
+        // PHP even loads.
 
-        console.log("[debug] all checks passed — posting to PHP...");
+        debug("all checks passed — posting to PHP...");
 
         let phpResponse;
 
@@ -235,7 +325,7 @@ export default {
                     message:   message,
                 }),
             });
-            console.log("[debug] PHP response status:", phpResponse.status);
+            debug("PHP response status:", phpResponse.status);
         } catch (e) {
             console.error(`[shared-contact] Network error reaching PHP endpoint: ${e.message}`);
             return failRedirect(url, redirectTarget, generateRef());
@@ -245,35 +335,47 @@ export default {
         // STEP 10 — Handle PHP response and redirect browser
         // --------------------------------------------------------
 
+        let phpRawBody;
         let phpData;
 
-
-
-		let phpRawBody;
         try {
             phpRawBody = await phpResponse.text();
-            console.log("[debug] PHP raw response:", phpRawBody.substring(0, 200));
+            debug("PHP raw response:", phpRawBody.substring(0, 200));
             phpData = JSON.parse(phpRawBody);
-            console.log("[debug] PHP response body:", JSON.stringify(phpData));
+            debug("PHP response body:", JSON.stringify(phpData));
         } catch (e) {
             console.error(`[shared-contact] Could not parse PHP response: ${e.message}`);
             console.error(`[shared-contact] Raw body was: ${phpRawBody ? phpRawBody.substring(0, 200) : "empty"}`);
             return failRedirect(url, redirectTarget, generateRef());
         }
 
-
-
-
-
         if (phpData.success) {
-            console.log("[debug] success — redirecting with success message");
+            debug("success — redirecting with success message");
             return successRedirect(url, redirectTarget);
         } else {
-            console.log("[debug] PHP reported failure, ref:", phpData.ref);
+            debug("PHP reported failure, ref:", phpData.ref);
             return failRedirect(url, redirectTarget, phpData.ref ?? generateRef());
         }
     }
 };
+
+
+// ============================================================
+// DEBUG HELPER
+// ============================================================
+
+/**
+ * debug()
+ *
+ * Logs a message to Cloudflare Workers logs only when DEBUG is true.
+ * In production (DEBUG = false) this function is a no-op — zero overhead.
+ * All arguments are passed through to console.log as-is.
+ *
+ * Usage: debug("label:", value);
+ */
+function debug(...args) {
+    if (DEBUG) console.log("[debug]", ...args);
+}
 
 
 // ============================================================
@@ -282,9 +384,14 @@ export default {
 
 /**
  * buildRedirectUrl()
+ *
  * Constructs the final redirect URL from its components.
  * Always uses https:// and www. prefix.
  * Query string is appended before anchor.
+ *
+ * Example:
+ *   hostname: "acmeplumbing.com", path: "/thank-you", anchor: "contact"
+ *   → https://www.acmeplumbing.com/thank-you?ui-msgtype=success&ui-msgdata=...#contact
  */
 function buildRedirectUrl(url, path, params, anchor) {
     const host  = url.hostname.startsWith("www.")
@@ -301,6 +408,7 @@ function buildRedirectUrl(url, path, params, anchor) {
 /**
  * successRedirect()
  * Redirects with ui-msgtype=success and the real success message.
+ * Used when the email was sent successfully.
  */
 function successRedirect(url, redirectTarget) {
     const target = buildRedirectUrl(
@@ -317,8 +425,16 @@ function successRedirect(url, redirectTarget) {
 
 /**
  * fakeSuccess()
+ *
  * Returns a redirect that looks like success but is a silent rejection.
- * Uses the validated redirectTarget if available, ROOT_REDIRECT if not.
+ * Used for spam, invalid fields, unknown domains, and any other case
+ * where we want the submitter to believe it worked.
+ *
+ * Uses redirectTarget if available, ROOT_REDIRECT only in steps 1 and 2
+ * before form data has been parsed.
+ *
+ * The subtle message difference ("sent." vs "sent !!!") lets you verify
+ * spam filtering is working during testing.
  */
 function fakeSuccess(url, redirectTarget) {
     const target = buildRedirectUrl(
@@ -335,7 +451,10 @@ function fakeSuccess(url, redirectTarget) {
 
 /**
  * failRedirect()
+ *
  * Redirects with ui-msgtype=fail and a reference ID for genuine failures.
+ * Used only for real system failures (SMTP down, PHP unreachable, etc.).
+ * The reference ID appears in both the user-facing message and the PHP log.
  */
 function failRedirect(url, redirectTarget, ref) {
     const target = buildRedirectUrl(
@@ -357,23 +476,29 @@ function failRedirect(url, redirectTarget, ref) {
 
 /**
  * parseRedirect()
+ *
  * Validates and parses the optional redirect form field.
- * Returns { path, anchor } — falls back to root if invalid.
+ * Returns { path, anchor } — falls back to root if invalid or empty.
  *
  * Valid:    /                  → { path: "/",          anchor: "" }
  * Valid:    /thank-you         → { path: "/thank-you", anchor: "" }
  * Valid:    /thank-you#contact → { path: "/thank-you", anchor: "contact" }
  * Valid:    #contact           → { path: "/",          anchor: "contact" }
+ * Valid:    /#contact          → { path: "/",          anchor: "contact" }
  * Invalid:  https://...        → { path: "/",          anchor: "" }
+ * Invalid:  //evil.com         → { path: "/",          anchor: "" }
+ * Invalid:  ?query=string      → { path: "/",          anchor: "" }
  * Empty:    ""                 → { path: "/",          anchor: "" }
  */
 function parseRedirect(redirect) {
     const fallback = { path: "/", anchor: "" };
     if (!redirect) return fallback;
 
+    // Anchor-only e.g. "#contact" → root path with anchor
     if (redirect.startsWith("#")) {
         return { path: "/", anchor: sanitizeAnchor(redirect.slice(1)) };
     }
+
     if (!redirect.startsWith("/"))      return fallback;
     if (redirect.includes("://"))       return fallback;
     if (redirect.startsWith("//"))      return fallback;
@@ -390,7 +515,9 @@ function parseRedirect(redirect) {
 
 /**
  * sanitizeAnchor()
+ *
  * Strips characters that aren't valid in HTML fragment identifiers.
+ * Prevents injection of unexpected characters into the redirect URL.
  */
 function sanitizeAnchor(anchor) {
     return anchor.replace(/[^a-zA-Z0-9\-_\.]/g, "");
@@ -403,7 +530,9 @@ function sanitizeAnchor(anchor) {
 
 /**
  * isValidEmailFormat()
+ *
  * Checks that a string looks like a valid email address (format only).
+ * MX record validation happens separately in hasMxRecords().
  */
 function isValidEmailFormat(email) {
     const re = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
@@ -412,7 +541,9 @@ function isValidEmailFormat(email) {
 
 /**
  * hasMxRecords()
+ *
  * Checks whether a domain has MX records via Cloudflare DNS-over-HTTPS.
+ * Uses 1.1.1.1 — always available from within a Cloudflare Worker.
  * Returns false on any error — fails conservatively.
  */
 async function hasMxRecords(domain) {
@@ -433,11 +564,9 @@ async function hasMxRecords(domain) {
 }
 
 /**
-/**
  * isSpamOrMaliciousName()
  *
  * Checks a name field for spam or malicious content.
- * Names should never contain URLs or HTML tags.
  * Apostrophes are permitted for names like O'Brien, D'Angelo.
  *
  * Blocks:
@@ -483,16 +612,19 @@ function isSpamOrMaliciousMessage(value) {
 }
 
 
-
 // ============================================================
 // UTILITY HELPERS
 // ============================================================
 
 /**
  * generateRef()
+ *
  * Generates a short reference ID for error tracking.
- * Format: REF-YYYYMMDD-XXXX
- * Matches the format used by PHP for consistency.
+ * Format: REF-YYYYMMDD-XXXX where XXXX is 4 random hex characters.
+ * Matches the format used by PHP so references are consistent
+ * whether the error originates in the Worker or in PHP.
+ *
+ * Example output: REF-20260504-A3F7
  */
 function generateRef() {
     const now  = new Date();

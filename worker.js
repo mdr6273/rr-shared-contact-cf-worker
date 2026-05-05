@@ -160,6 +160,7 @@ export default {
      *   ctx     — Execution context (not used here)
      */
     async fetch(request, env, ctx) {
+		console.log("[debug] Worker fired:", request.method, request.url);
 
         // Extract the hostname from the request URL and strip any www. prefix
         // so it matches the keys in CUSTOMERS regardless of how the domain

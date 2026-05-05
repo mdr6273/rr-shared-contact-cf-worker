@@ -247,13 +247,23 @@ export default {
 
         let phpData;
 
+
+
+		let phpRawBody;
         try {
-            phpData = await phpResponse.json();
+            phpRawBody = await phpResponse.text();
+            console.log("[debug] PHP raw response:", phpRawBody.substring(0, 200));
+            phpData = JSON.parse(phpRawBody);
             console.log("[debug] PHP response body:", JSON.stringify(phpData));
         } catch (e) {
             console.error(`[shared-contact] Could not parse PHP response: ${e.message}`);
+            console.error(`[shared-contact] Raw body was: ${phpRawBody ? phpRawBody.substring(0, 200) : "empty"}`);
             return failRedirect(url, redirectTarget, generateRef());
         }
+
+
+
+
 
         if (phpData.success) {
             console.log("[debug] success — redirecting with success message");

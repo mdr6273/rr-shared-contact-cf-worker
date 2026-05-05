@@ -67,7 +67,7 @@ const CUSTOMERS = {
 // ============================================================
 
 const PHP_ENDPOINT  = "https://customertools.richardsonresources.com/formactions/shared-contact.php";
-const ALLOWED_FIELDS = new Set(["name", "email", "message", "redirect"]);
+const ALLOWED_FIELDS = new Set(["name", "email", "message", "redirect", "recaptchaResponse", "cf-turnstile-response"]);
 const REQUIRED_FIELDS = ["name", "email", "message"];
 const ROOT_REDIRECT  = { path: "/", anchor: "" };
 

@@ -87,8 +87,8 @@ const CUSTOMERS = {
     "richardsonresources.com": {
         recipient: "mdr6273@gmail.com"
     },
-    "ceincsd.com": {
-        recipient: "customerservice@ceincsd.com"
+    "krystenezehnder.com": {
+        recipient: "mdr6273@gmail.com"
     }
     // Add customers here following the pattern above
 };

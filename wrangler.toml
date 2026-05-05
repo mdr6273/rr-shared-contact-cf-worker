@@ -44,7 +44,7 @@
 # The name of your Worker as it appears in the Cloudflare dashboard.
 # Must be unique within your Cloudflare account.
 # Changing this creates a new Worker — rename with care.
-name = "shared-contact-form"
+name = "rr-shared-contact"
 
 # Worker script entry point
 main = "worker.js"

@@ -1,36 +1,42 @@
 # wrangler.toml — Cloudflare Worker deployment configuration
 #
-# This file tells Wrangler (the Cloudflare CLI) how to deploy worker.js.
+# This file tells Cloudflare Workers Builds how to deploy worker.js.
+# It is committed to Git — do NOT put secret values in this file.
 #
-# FIRST TIME SETUP
-# ----------------
-# 1. Install Wrangler globally:
-#      npm install -g wrangler
+# DEPLOYMENT
+# ----------
+# This Worker deploys automatically via Cloudflare Workers Builds
+# whenever a commit is pushed to the main branch of the connected
+# GitHub repository. No manual Wrangler commands are needed.
 #
-# 2. Authenticate with your Cloudflare account:
-#      wrangler login
-#
-# 3. Set the shared secret (do this ONCE — you cannot read it back):
-#      wrangler secret put FORM_SECRET
-#    When prompted, enter the same value configured in .htaccess on Dreamhost.
-#    Store this value in your password manager before setting it.
-#
-# 4. Deploy the Worker:
-#      wrangler deploy
+# To deploy an update:
+#   1. Edit worker.js (e.g. add/remove a customer in CUSTOMERS)
+#   2. Commit the change in Git Desktop
+#   3. Push to main — Cloudflare deploys automatically
 #
 # ADDING A NEW CUSTOMER
 # ---------------------
 # 1. Add an entry to the CUSTOMERS object in worker.js
-# 2. Run: wrangler deploy
-# 3. Add route www.customer.com/mailform in their Cloudflare dashboard
-#    pointing at this Worker
+# 2. Commit and push via Git Desktop
+# 3. Add WAF Managed Challenge rule in customer's Cloudflare dashboard:
+#      Expression: http.request.uri.path eq "/mailform"
+#                  and http.request.method eq "POST"
+#      Action: Managed Challenge
+# 4. Add route www.customer.com/mailform → rr-shared-contact
+#    in customer's Cloudflare dashboard
+# 5. Point form action to https://www.customer.com/mailform
+#    and confirm form submits as a traditional POST
 #
 # UPDATING THE SECRET
 # -------------------
-# 1. Generate a new secret and save it to your password manager
-# 2. Update .htaccess on Dreamhost FIRST (so it accepts both old and new briefly)
-# 3. Run: wrangler secret put FORM_SECRET
-# 4. Update .htaccess to accept the new secret only
+# The FORM_SECRET is set in the Cloudflare dashboard:
+#   Workers & Pages → rr-shared-contact → Settings → Variables and Secrets
+#
+# To rotate the secret:
+# 1. Generate a new secret and save to your password manager
+# 2. Update .htaccess on Dreamhost FIRST with the new value
+# 3. Update FORM_SECRET in the Cloudflare dashboard
+# 4. Verify a test submission works
 #
 # WRANGLER DOCUMENTATION
 # ----------------------
@@ -41,30 +47,42 @@
 # WORKER IDENTITY
 # ============================================================
 
-# The name of your Worker as it appears in the Cloudflare dashboard.
-# Must be unique within your Cloudflare account.
-# Changing this creates a new Worker — rename with care.
-name = "shared-contact-form"
+# Worker name as it appears in the Cloudflare dashboard.
+# Must match exactly — Workers Builds will fail if these differ.
+name = "rr-shared-contact"
 
 # Worker script entry point
 main = "worker.js"
 
-# Cloudflare Workers compatibility date.
-# This pins the Workers runtime behaviour to a specific date so that
-# Cloudflare's future runtime changes don't silently break your Worker.
+# Pins the Workers runtime behaviour to a specific date so that
+# Cloudflare's future runtime changes don't silently break the Worker.
 # Update this periodically when you review and redeploy.
 # See: https://developers.cloudflare.com/workers/configuration/compatibility-dates/
 compatibility_date = "2026-05-04"
 
 
 # ============================================================
+# ROUTING
+# ============================================================
+
+# Disable the automatic workers.dev public URL.
+# This Worker is a private relay — it should only be reachable
+# via the customer domain routes configured in the Cloudflare
+# dashboard, not via a public workers.dev subdomain.
+workers_dev = false
+
+# Disable preview URLs for non-production branch builds.
+preview_urls = false
+
+
+# ============================================================
 # SECRETS
 # ============================================================
-# Secrets are NOT defined here — they are set via:
-#   wrangler secret put FORM_SECRET
+# Secrets are NOT defined here — they are set in the Cloudflare
+# dashboard under:
+#   Workers & Pages → rr-shared-contact → Settings → Variables and Secrets
 #
-# They appear in code as env.FORM_SECRET.
-# Do not add secret values to this file — it may be committed to Git.
+# Do not add secret values to this file — it is committed to Git.
 #
 # Expected secrets:
 #   FORM_SECRET — Shared secret sent in X-WAF-Secret header to PHP.

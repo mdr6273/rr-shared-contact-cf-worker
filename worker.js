@@ -423,39 +423,55 @@ async function hasMxRecords(domain) {
 }
 
 /**
+/**
  * isSpamOrMaliciousName()
+ *
  * Checks a name field for spam or malicious content.
- * More lenient than message check — permits apostrophes for names like O'Brien.
+ * Names should never contain URLs or HTML tags.
+ * Apostrophes are permitted for names like O'Brien, D'Angelo.
+ *
+ * Blocks:
+ *   - http:// and https:// URLs
+ *   - www. patterns
+ *   - HTML tags
  */
 function isSpamOrMaliciousName(value) {
     const checks = [
-        /https?:\/\//i,
-        /www\./i,
-        /<[^>]+>/,
-        /\b(select|insert|update|delete|drop|union|exec|script)\b/i,
-        /[<>"`;]/,
-        /(\!{3,}|\?{3,}|\${3,})/,
+        /https?:\/\//i, // http:// or https:// URLs
+        /www\./i,        // www. URLs without protocol
+        /<[^>]+>/,       // HTML tags
     ];
     return checks.some(pattern => pattern.test(value));
 }
 
 /**
  * isSpamOrMaliciousMessage()
- * Checks a message field for spam or malicious content.
- * Full check including spam keywords. Single quote excluded for apostrophes.
+ *
+ * Checks a message field for clickable links that could harm
+ * unsuspecting email recipients. Intentionally narrow — we only
+ * block content that would be dangerous in a plain text email.
+ *
+ * HTML tags are not blocked because PHP sends plain text email
+ * so tags arrive literally and cannot be rendered or clicked.
+ *
+ * Blocks:
+ *   - http:// and https:// URLs (render as clickable links in email)
+ *   - www. patterns (render as clickable links in most email clients)
+ *
+ * Does NOT block:
+ *   - Bare domain patterns (too many false positives)
+ *   - HTML tags (no execution context in plain text email)
+ *   - SQL/script keywords (no execution context in email)
+ *   - Spam keywords (too aggressive, catches legitimate messages)
  */
 function isSpamOrMaliciousMessage(value) {
     const checks = [
-        /https?:\/\//i,
-        /www\./i,
-        /<[^>]+>/,
-        /\b(select|insert|update|delete|drop|union|exec|script)\b/i,
-        /[<>"`;]/,
-        /(\!{3,}|\?{3,}|\${3,})/,
-        /\b(viagra|cialis|casino|lottery|winner|prize|click here|buy now|free money)\b/i,
+        /https?:\/\//i, // http:// or https:// URLs
+        /www\./i,        // www. URLs without protocol
     ];
     return checks.some(pattern => pattern.test(value));
 }
+
 
 
 // ============================================================

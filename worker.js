@@ -95,10 +95,10 @@
  *   3. Remove the route from their Cloudflare dashboard
  */
 const CUSTOMERS = {
-    "www.richardsonresources.com": {
+    "richardsonresources.com": {
         recipient: "mdr6273@gmail.com"
     },
-    "www.ceincsd.com": {
+    "ceincsd.com": {
         recipient: "customerservice@ceincsd.com"
     }
     // Add customers here following the pattern above

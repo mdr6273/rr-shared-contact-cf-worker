@@ -1,0 +1,71 @@
+# wrangler.toml — Cloudflare Worker deployment configuration
+#
+# This file tells Wrangler (the Cloudflare CLI) how to deploy worker.js.
+#
+# FIRST TIME SETUP
+# ----------------
+# 1. Install Wrangler globally:
+#      npm install -g wrangler
+#
+# 2. Authenticate with your Cloudflare account:
+#      wrangler login
+#
+# 3. Set the shared secret (do this ONCE — you cannot read it back):
+#      wrangler secret put FORM_SECRET
+#    When prompted, enter the same value configured in .htaccess on Dreamhost.
+#    Store this value in your password manager before setting it.
+#
+# 4. Deploy the Worker:
+#      wrangler deploy
+#
+# ADDING A NEW CUSTOMER
+# ---------------------
+# 1. Add an entry to the CUSTOMERS object in worker.js
+# 2. Run: wrangler deploy
+# 3. Add route www.customer.com/mailform in their Cloudflare dashboard
+#    pointing at this Worker
+#
+# UPDATING THE SECRET
+# -------------------
+# 1. Generate a new secret and save it to your password manager
+# 2. Update .htaccess on Dreamhost FIRST (so it accepts both old and new briefly)
+# 3. Run: wrangler secret put FORM_SECRET
+# 4. Update .htaccess to accept the new secret only
+#
+# WRANGLER DOCUMENTATION
+# ----------------------
+# https://developers.cloudflare.com/workers/wrangler/
+
+
+# ============================================================
+# WORKER IDENTITY
+# ============================================================
+
+# The name of your Worker as it appears in the Cloudflare dashboard.
+# Must be unique within your Cloudflare account.
+# Changing this creates a new Worker — rename with care.
+name = "shared-contact-form"
+
+# Worker script entry point
+main = "worker.js"
+
+# Cloudflare Workers compatibility date.
+# This pins the Workers runtime behaviour to a specific date so that
+# Cloudflare's future runtime changes don't silently break your Worker.
+# Update this periodically when you review and redeploy.
+# See: https://developers.cloudflare.com/workers/configuration/compatibility-dates/
+compatibility_date = "2026-05-04"
+
+
+# ============================================================
+# SECRETS
+# ============================================================
+# Secrets are NOT defined here — they are set via:
+#   wrangler secret put FORM_SECRET
+#
+# They appear in code as env.FORM_SECRET.
+# Do not add secret values to this file — it may be committed to Git.
+#
+# Expected secrets:
+#   FORM_SECRET — Shared secret sent in X-WAF-Secret header to PHP.
+#                 Must match the value in .htaccess on Dreamhost.

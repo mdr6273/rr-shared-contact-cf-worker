@@ -1,5 +1,5 @@
 /**
- * worker.js — Shared contact form Worker
+ * worker.js — Shared contact form Worker OG
  *
  * Deployed to: Cloudflare Workers (rr-shared-contact)
  * Handles route: www.[customer].com/mailform

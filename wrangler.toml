@@ -44,7 +44,7 @@
 
 
 # ============================================================
-# WORKER IDENTITY
+# WORKER IDENTITY 
 # ============================================================
 
 # Worker name as it appears in the Cloudflare dashboard.
